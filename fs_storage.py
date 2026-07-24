@@ -23,7 +23,7 @@ import firebase_admin
 
 cred = credentials.ApplicationDefault()
 firebase_admin.initialize_app(cred)
-db = firestore.Client()
+db = firestore.client(database_id='causmos-db')
 
 SESSION_NAME = 'sessions'
 

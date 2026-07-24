@@ -51,6 +51,8 @@ inbound_services:
 
 env_variables:
   SLIDE_TEMPLATE: "" #Google Slide template ID for the default template
+  FLASK_SECRET_KEY: "a3f8d2e1c7b94f05ae2d1c3e8f7b6a90d4e5f2c1b8a73d6e9f0c2b4a7d8e3f1"
+  APP_URL: "https://adh-na-433204.appspot.com"
 
 # Add the following secrets to your Google Secrets Manager
 #   client_secret - Upload your client_secret.json file to this

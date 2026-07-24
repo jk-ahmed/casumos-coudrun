@@ -40,5 +40,5 @@ def get_secret(secret_id) -> str:
     secret = response.payload.data.decode('UTF-8')
   except Exception as e:
     logging.exception(e)
-    return None
+    raise RuntimeError(f'Failed to retrieve secret "{secret_id}" from Secret Manager: {e}') from e
   return secret

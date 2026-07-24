@@ -66,7 +66,7 @@ app = Flask(__name__)
 
 app.config['SESSION_PERMANENT'] = True
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=2)
-app.secret_key = get_secret('flask_secret_key')
+app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'changeme-set-a-real-secret-in-env')
 PROJECT_ID = '' #can set for local testing
 
 
@@ -104,7 +104,7 @@ if is_loopback('localhost'):
 
 else:
   PROJECT_ID = os.getenv('GOOGLE_CLOUD_PROJECT')
-  _MAIN_URL = f'https://{PROJECT_ID}.ew.r.appspot.com'
+  _MAIN_URL = os.environ.get('APP_URL', f'https://{PROJECT_ID}.ew.r.appspot.com')
 
   _REDIRECT_URI = f'{_MAIN_URL}/oauth_completed'
   app.config['SESSION_COOKIE_SECURE'] = True
@@ -409,7 +409,13 @@ def report() -> render_template:
           from_d = df.index.get_loc(data['from_date'])
           to_d = df.index.get_loc(data['to_date'])
           event_d = df.index.get_loc(data['event_date'])
-        except KeyError:
+        except KeyError as e:
+          logging.error(
+            'Date not found in index: %s. from_date=%s to_date=%s event_date=%s. '
+            'Index range: %s to %s (%d rows)',
+            e, data['from_date'], data['to_date'], data['event_date'],
+            df.index.min(), df.index.max(), len(df),
+          )
           return render_template(
             'error.html',
             error_msg='One of your selected dates does not exist \

@@ -1,0 +1,47 @@
+# Version control
+.git
+.gitignore
+.gcloudignore
+.github/
+
+# Python bytecode & caches
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+/venv
+/.venv
+
+# Config & setup files (not needed at runtime)
+/setup.cfg
+app.yaml
+cloudbuild.yaml
+*.sh
+
+# Documentation & notebooks
+README.md
+LICENSE
+docs/
+*.md
+*.ipynb
+
+# Secrets & local env files
+.env
+.env.*
+
+# Logs & temp files
+*.log
+*.tmp
+*.bak
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+.dockerignore
