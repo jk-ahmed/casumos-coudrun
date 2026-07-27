@@ -2181,6 +2181,8 @@
       var target_event = document.getElementById('target_event_dd').value;
       var errors = 0;
 
+      console.log('[DEBUG] generateData: dates from=%s to=%s event=%s target=%s', from_date, to_date, event_date, target_event);
+
       sessionStorage.setItem('from_date', from_date);
       sessionStorage.setItem('to_date', to_date);
       sessionStorage.setItem('event_date', event_date);
@@ -2202,20 +2204,34 @@
       if (gads_data.metrics.length > 0) {
         data_to_send['gads'] = gads_data;
         mcc_id_ts = gads_data.mcc_id;
+        console.log('[DEBUG] Google Ads datasource included: mcc_id=%s metrics=%o customers=%o', gads_data.mcc_id, gads_data.metrics, Object.keys(gads_data.query));
+      } else {
+        console.log('[DEBUG] No Google Ads datasource');
       }
       if (ga4_data.metrics.length > 0) {
         data_to_send['ga4'] = ga4_data;
         ga4_id_ts = ga4_data.account;
+        console.log('[DEBUG] GA4 datasource included: account=%s property=%s metrics=%o', ga4_data.account, ga4_data.property, ga4_data.metrics);
+      } else {
+        console.log('[DEBUG] No GA4 datasource');
       }
       if (csv_data.metrics.length > 0) {
         data_to_send['csv'] = csv_data;
         data_to_send['csv_format'] = csv_data.format;
+        console.log('[DEBUG] CSV datasource included: format=%s date_col=%s metrics=%o', csv_data.format, csv_data.date_column, csv_data.metrics);
+      } else {
+        console.log('[DEBUG] No CSV/gSheet datasource');
       }
       if (bq_data.metrics.length > 0) {
         data_to_send['bq'] = bq_data;
+        console.log('[DEBUG] BigQuery datasource included: date_col=%s metrics=%o', bq_data.date_column, bq_data.metrics);
+      } else {
+        console.log('[DEBUG] No BigQuery datasource');
       }
 
-      document.getElementById('data_to_send').value = JSON.stringify(data_to_send);
+      var payload = JSON.stringify(data_to_send);
+      console.log('[DEBUG] Full payload being sent to /report:', payload);
+      document.getElementById('data_to_send').value = payload;
     }
 
     //Advanced Options
@@ -2405,9 +2421,11 @@
     }
 
     document.forms.namedItem('run_analysis_form').addEventListener('submit', function () {
+      console.log('[DEBUG] Run Analysis button clicked — form submitting to /report');
       reset_timer();
       openPopup('loading_modal');
       generateData();
+      console.log('[DEBUG] data_to_send hidden field value:', document.getElementById('data_to_send').value);
     });
 
     window.onunload = function (event) {

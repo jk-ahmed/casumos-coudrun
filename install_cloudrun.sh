@@ -47,25 +47,6 @@ gcloud services enable \
   secretmanager.googleapis.com \
   bigquery.googleapis.com
 
-CLOUDBUILD_SA=$(gcloud projects describe $PROJECT_ID --format="value(projectNumber)")@cloudbuild.gserviceaccount.com
-
-echo -e "${COLOR}Creating Artifact Registry repository 'app-images' (skipped if exists)...${NC}"
-gcloud artifacts repositories create app-images \
-  --repository-format=docker \
-  --location=$REGION \
-  --description="Causmos container images" 2>/dev/null || \
-  echo "Artifact Registry repository 'app-images' already exists."
-
-echo -e "${COLOR}Granting Cloud Build SA roles for cloudbuild.yaml deploys...${NC}"
-for ROLE in \
-  roles/run.admin \
-  roles/iam.serviceAccountUser \
-  roles/artifactregistry.writer; do
-  gcloud projects add-iam-policy-binding $PROJECT_ID \
-    --member="serviceAccount:$CLOUDBUILD_SA" \
-    --role=$ROLE --quiet
-done
-
 echo -e "${COLOR}Creating service account...${NC}"
 gcloud iam service-accounts create $SERVICE_ACCOUNT_NAME \
   --display-name="Causmos Cloud Run SA" 2>/dev/null || true

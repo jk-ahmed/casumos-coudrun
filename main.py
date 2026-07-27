@@ -341,11 +341,15 @@ def report() -> render_template:
   if request.form.get('data_to_send') and check_session_id():
     data = json.loads(request.form.get('data_to_send', 0, type=str))
 
+    logging.info('[DEBUG] /report called — datasources present: %s', [k for k in ['gads','ga4','csv','bq'] if k in data])
+    logging.info('[DEBUG] Date range: from=%s event=%s to=%s target=%s', data.get('from_date'), data.get('event_date'), data.get('to_date'), data.get('target_event'))
+
     raw_data = {}
     gads_responses = []
     credibility = 1 - (int(data['credibility']) / 100)
     warnings = ''
     if 'gads' in data:
+      logging.info('[DEBUG] Fetching Google Ads data: mcc_id=%s customers=%s metrics=%s', data['gads']['mcc_id'], list(data['gads']['query'].keys()), data['gads']['metrics'])
       for key in data['gads']['query']:
         try:
           gads_responses.append(
@@ -360,10 +364,12 @@ def report() -> render_template:
         except ValueError as e:
           logging.exception(e)
           session.clear()
-          return redirect('sessionExpired') 
+          return redirect('sessionExpired')
       raw_data = process_gads_responses(gads_responses, data['gads']['metrics'])
+      logging.info('[DEBUG] Google Ads data fetched — raw_data keys: %d rows', len(raw_data))
 
     if 'ga4' in data:
+      logging.info('[DEBUG] Fetching GA4 data: property=%s metrics=%s', data['ga4']['property'], data['ga4']['metrics'])
       raw_data = get_ga4_data(
           data['ga4']['property'],
           data['from_date'],
@@ -371,20 +377,27 @@ def report() -> render_template:
           data['ga4']['metrics'],
           raw_data,
       )
+      logging.info('[DEBUG] GA4 data fetched — raw_data rows: %d', len(raw_data))
+
     if 'csv' in data:
       if data['csv_format'] == 'gsheet':
+        logging.info('[DEBUG] Fetching gSheet data: sheet_id=%s tab=%s', get_value_session(get_session_id(), 'sheet_id'), get_value_session(get_session_id(), 'gs_tab'))
         csv_data = get_raw_gsheet_data(
           get_value_session(get_session_id(), 'sheet_id'),
           get_value_session(get_session_id(), 'gs_tab'),
         )[0]
       else:
+        logging.info('[DEBUG] Loading CSV data from session')
         csv_data = get_value_session(get_session_id(), 'csv_data')
       raw_data = csv_merge_data(csv_data, data['csv'], raw_data, 'csv')
+      logging.info('[DEBUG] CSV/gSheet merged — raw_data rows: %d', len(raw_data))
 
     if 'bq' in data:
+      logging.info('[DEBUG] Fetching BigQuery data: location=%s', get_value_session(get_session_id(), 'bq_full_location'))
       bq_data = _get_raw_bq_data(
         get_value_session(get_session_id(), 'bq_full_location'))
       raw_data = csv_merge_data(bq_data, data['bq'], raw_data, 'bq')
+      logging.info('[DEBUG] BigQuery merged — raw_data rows: %d', len(raw_data))
 
     if raw_data:
       df = pd.DataFrame.from_dict(raw_data).transpose()
@@ -442,9 +455,11 @@ def report() -> render_template:
         if not image_name:
           image_name = str(uuid4()) + '.png'
         set_value_session(get_session_id(), 'image_name', image_name)
+        logging.info('[DEBUG] Generating causal impact chart — image_name=%s df shape=%s columns=%s', image_name, df.shape, list(df.columns))
         org_chart = get_causal_impact_chart(
           impact=impact, store_img=True, image_name=image_name
         )
+        logging.info('[DEBUG] Causal impact chart generated successfully')
         org_chart = org_chart.replace('var spec', 'main_spec').replace(
           ' spec,', ' main_spec,'
         )

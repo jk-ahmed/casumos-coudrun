@@ -1,56 +1,73 @@
 # Cloud Build pipeline — cached incremental deployments for Causmos
 #
-# Replaces "gcloud run deploy --source ." for day-to-day deploys.
-# The first-time setup (IAM, Firestore, AR repo) is still handled by install_cloudrun.sh.
+# Replaces: gcloud run deploy causmos-service --source . --region asia-south1
 #
-# Trigger manually:
-#   gcloud builds submit --config cloudbuild.yaml .
+# Manual submit:
+#   gcloud builds submit --config cloudbuild.yaml . --project=acceleration-ga-poc
 #
-# Or connect to a Cloud Build Trigger in the GCP Console.
+# Or wire to a Cloud Build Trigger in GCP Console for automatic deploys on push.
 
 substitutions:
   _REGION: asia-south1
   _SERVICE_NAME: causmos-service
-  _REPO: app-images
+  _REPO: cloud-run-source-deploy
 
 steps:
-  # Pull the previous image to prime Docker's layer cache.
-  # The "|| true" ensures the build proceeds even on a first run (no image yet).
+  # Resolve image tag:
+  #   - Trigger build: COMMIT_SHA is set automatically (git SHA of the commit)
+  #   - Manual submit: COMMIT_SHA is empty, falls back to BUILD_ID (unique per build)
   - name: 'gcr.io/cloud-builders/docker'
-    id: pull-cache
+    id: set-tag
     entrypoint: bash
     args:
       - '-c'
-      - >-
-        docker pull
-        ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE_NAME}:latest
-        || true
+      - |
+        TAG="${COMMIT_SHA:-$BUILD_ID}"
+        printf '%s' "$TAG" > /workspace/_tag
+        echo "Image tag: $TAG"
 
-  # Build using cached layers. When requirements.txt is unchanged, the
-  # pip-install layer is reused from the pulled image — skipping the heavy
-  # TensorFlow/Google-Cloud dependency installation.
+  # Pull previous image to prime Docker's layer cache.
+  # Runs in parallel with set-tag (waitFor: ['-'] = start immediately).
+  - name: 'gcr.io/cloud-builders/docker'
+    id: pull-cache
+    waitFor: ['-']
+    entrypoint: bash
+    args:
+      - '-c'
+      - |
+        docker pull \
+          ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE_NAME}:latest \
+          || true
+
+  # Build — when requirements.txt is unchanged, the pip-install layer
+  # (TensorFlow, TFP, all Google libs) is reused from cache, saving ~12 min.
   - name: 'gcr.io/cloud-builders/docker'
     id: build
-    waitFor: ['pull-cache']
+    waitFor: ['set-tag', 'pull-cache']
+    entrypoint: bash
     args:
-      - build
-      - '--cache-from'
-      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE_NAME}:latest'
-      - '-t'
-      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE_NAME}:$COMMIT_SHA'
-      - '-t'
-      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE_NAME}:latest'
-      - '.'
+      - '-c'
+      - |
+        TAG=$(cat /workspace/_tag)
+        docker build \
+          --cache-from ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE_NAME}:latest \
+          -t ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE_NAME}:$TAG \
+          -t ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE_NAME}:latest \
+          .
 
-  # Push the immutable commit-SHA tag (used for rollbacks).
+  # Push unique tag — immutable reference for rollbacks.
   - name: 'gcr.io/cloud-builders/docker'
-    id: push-sha
+    id: push-tag
     waitFor: ['build']
+    entrypoint: bash
     args:
-      - push
-      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE_NAME}:$COMMIT_SHA'
+      - '-c'
+      - |
+        TAG=$(cat /workspace/_tag)
+        docker push \
+          ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE_NAME}:$TAG
 
-  # Push the mutable latest tag (used as --cache-from on the next build).
+  # Push latest tag — used as --cache-from on the next build.
   - name: 'gcr.io/cloud-builders/docker'
     id: push-latest
     waitFor: ['build']
@@ -58,30 +75,24 @@ steps:
       - push
       - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE_NAME}:latest'
 
-  # Deploy the pre-built image to Cloud Run.
-  # Using --image instead of --source preserves all existing service config:
-  # memory, CPU, env vars, secrets, service account, min/max instances, etc.
+  # Deploy pre-built image to Cloud Run.
+  # --image preserves all existing service config: memory, CPU, env vars,
+  # secrets, service account, min/max instances, timeout, etc.
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     id: deploy
-    waitFor: ['push-sha', 'push-latest']
-    entrypoint: gcloud
+    waitFor: ['push-tag', 'push-latest']
+    entrypoint: bash
     args:
-      - run
-      - deploy
-      - '${_SERVICE_NAME}'
-      - '--image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE_NAME}:$COMMIT_SHA'
-      - '--region=${_REGION}'
-      - '--quiet'
-
-# Registers both tags as build outputs in Cloud Build history.
-images:
-  - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE_NAME}:$COMMIT_SHA'
-  - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE_NAME}:latest'
+      - '-c'
+      - |
+        TAG=$(cat /workspace/_tag)
+        gcloud run deploy ${_SERVICE_NAME} \
+          --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE_NAME}:$TAG \
+          --region=${_REGION} \
+          --quiet
 
 options:
-  # 8-core machine cuts the TensorFlow compilation/linking time significantly.
-  machineType: E2_HIGHCPU_8
+  # machineType: E2_HIGHCPU_8
   logging: CLOUD_LOGGING_ONLY
 
-# 30-minute ceiling — first cold build with TF takes ~15 min; cached builds ~3 min.
 timeout: 1800s
