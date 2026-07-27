@@ -1,6 +1,79 @@
 <br>
 <br>
 
+<!-- Debug panel — reads sessionStorage['debug_log'] set before form submit -->
+<div id="debug_panel" style="
+  display:none;
+  position:fixed;
+  bottom:0; right:0;
+  width:480px;
+  max-height:340px;
+  background:#1e1e1e;
+  color:#d4d4d4;
+  font-family:monospace;
+  font-size:12px;
+  z-index:9999;
+  border-top:2px solid #0078d4;
+  border-left:2px solid #0078d4;
+  border-radius:6px 0 0 0;
+  box-shadow:0 -2px 12px rgba(0,0,0,0.5);
+  overflow:hidden;
+  flex-direction:column;
+">
+  <div style="
+    background:#0078d4;
+    color:#fff;
+    padding:4px 10px;
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    cursor:pointer;
+    user-select:none;
+  " onclick="toggleDebugBody()">
+    <span>Debug Log</span>
+    <span style="display:flex;gap:8px">
+      <button onclick="event.stopPropagation();clearDebugLog();" style="background:transparent;border:none;color:#fff;cursor:pointer;font-size:11px;">Clear</button>
+      <span id="debug_toggle_icon">▼</span>
+    </span>
+  </div>
+  <pre id="debug_body" style="
+    margin:0;
+    padding:8px;
+    overflow-y:auto;
+    max-height:290px;
+    white-space:pre-wrap;
+    word-break:break-all;
+  "></pre>
+</div>
+
+<script>
+  (function () {
+    var log = sessionStorage.getItem('debug_log');
+    if (log) {
+      var panel = document.getElementById('debug_panel');
+      document.getElementById('debug_body').textContent = log;
+      panel.style.display = 'flex';
+    }
+  })();
+
+  function toggleDebugBody() {
+    var body = document.getElementById('debug_body');
+    var icon = document.getElementById('debug_toggle_icon');
+    if (body.style.display === 'none') {
+      body.style.display = 'block';
+      icon.textContent = '▼';
+    } else {
+      body.style.display = 'none';
+      icon.textContent = '▲';
+    }
+  }
+
+  function clearDebugLog() {
+    sessionStorage.removeItem('debug_log');
+    document.getElementById('debug_panel').style.display = 'none';
+  }
+</script>
+
 </body>
 
 </html>

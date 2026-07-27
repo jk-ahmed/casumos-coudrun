@@ -2425,7 +2425,25 @@
       reset_timer();
       openPopup('loading_modal');
       generateData();
-      console.log('[DEBUG] data_to_send hidden field value:', document.getElementById('data_to_send').value);
+      var payload = document.getElementById('data_to_send').value;
+      console.log('[DEBUG] data_to_send hidden field value:', payload);
+
+      // Persist debug info to sessionStorage so it survives the page navigation
+      var parsed = {};
+      try { parsed = JSON.parse(payload); } catch(e) {}
+      var lines = ['=== Run Analysis Debug ==='];
+      lines.push('Time: ' + new Date().toISOString());
+      lines.push('Dates: from=' + parsed.from_date + '  event=' + parsed.event_date + '  to=' + parsed.to_date);
+      lines.push('Target event: ' + parsed.target_event);
+      lines.push('Credibility: ' + parsed.credibility + '%');
+      var sources = [];
+      if (parsed.gads) sources.push('Google Ads (mcc=' + parsed.gads.mcc_id + ', metrics=' + parsed.gads.metrics + ', customers=' + Object.keys(parsed.gads.query) + ')');
+      if (parsed.ga4)  sources.push('GA4 (property=' + parsed.ga4.property + ', metrics=' + parsed.ga4.metrics + ')');
+      if (parsed.csv)  sources.push('CSV/gSheet (format=' + parsed.csv_format + ', metrics=' + parsed.csv.metrics + ')');
+      if (parsed.bq)   sources.push('BigQuery (metrics=' + parsed.bq.metrics + ')');
+      lines.push('Datasources: ' + (sources.length ? sources.join(' | ') : 'NONE'));
+      lines.push('Full payload: ' + payload);
+      sessionStorage.setItem('debug_log', lines.join('\n'));
     });
 
     window.onunload = function (event) {
