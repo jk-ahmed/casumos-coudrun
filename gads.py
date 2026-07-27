@@ -25,8 +25,12 @@ API_VERSION ='v22'
 
 def get_gads_client(mcc_id: str) -> GoogleAdsClient:
     try:
-        main_creds = json.loads(get_value_session(session['session_id'], 'credentials'))
-    except ValueError as e:
+        raw = get_value_session(session['session_id'], 'credentials')
+        if raw is None:
+            logging.error('get_gads_client: credentials is None for session_id=%s', session.get('session_id'))
+            raise ValueError('Session credentials missing')
+        main_creds = json.loads(raw)
+    except (ValueError, TypeError) as e:
         logging.exception(e)
         return f"Error: Session Expired"
     creds = {
@@ -194,6 +198,13 @@ def process_gads_responses(responses, metrics: list):
     for metric in final_d[key].copy():
       if not metric[5 : len(metric)] in metrics:
         final_d[key].pop(metric)
+
+  if final_d:
+    dates = sorted(final_d.keys())
+    logging.info('[DEBUG] Google Ads data returned %d rows, date range: %s to %s', len(final_d), dates[0], dates[-1])
+  else:
+    logging.warning('[DEBUG] Google Ads data returned 0 rows for the requested date range')
+
   return final_d
 
 def get_gads_campaigns(mcc_id: str, customer_id: str):

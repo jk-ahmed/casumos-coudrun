@@ -150,15 +150,18 @@ def error_page(error_msg) -> render_template:
 
 
 def check_session_id() -> bool:
-  """Checks if a session already exists.
+  """Checks if a session already exists AND has credentials in Firestore.
 
   Returns:
-    Boolean 'true' if session exists, 'false' if not.
+    Boolean 'true' if session exists with credentials, 'false' if not.
   """
-  if 'session_id' in session:
-    return True
-  else:
+  if 'session_id' not in session:
     return False
+  creds = get_value_session(session['session_id'], 'credentials')
+  if creds is None:
+    logging.warning('check_session_id: session_id present but no credentials in Firestore for session=%s', session['session_id'])
+    return False
+  return True
 
 
 def get_session_id() -> str:
@@ -352,16 +355,19 @@ def report() -> render_template:
       logging.info('[DEBUG] Fetching Google Ads data: mcc_id=%s customers=%s metrics=%s', data['gads']['mcc_id'], list(data['gads']['query'].keys()), data['gads']['metrics'])
       for key in data['gads']['query']:
         try:
-          gads_responses.append(
-              get_gads_data(
-                  data['gads']['mcc_id'],
-                  key,
-                  data['gads']['query'][key],
-                  data['from_date'],
-                  data['to_date']
-              )
+          result = get_gads_data(
+              data['gads']['mcc_id'],
+              key,
+              data['gads']['query'][key],
+              data['from_date'],
+              data['to_date']
           )
-        except ValueError as e:
+          if isinstance(result, str) and result.startswith('Error:'):
+            logging.error('get_gads_data returned error for customer %s: %s', key, result)
+            session.clear()
+            return redirect('sessionExpired')
+          gads_responses.append(result)
+        except (ValueError, TypeError) as e:
           logging.exception(e)
           session.clear()
           return redirect('sessionExpired')
@@ -418,23 +424,33 @@ def report() -> render_template:
             ' were missing and were filled in automatically'
           )
 
-        try:
-          from_d = df.index.get_loc(data['from_date'])
-          to_d = df.index.get_loc(data['to_date'])
-          event_d = df.index.get_loc(data['event_date'])
-        except KeyError as e:
+        data_start = df.index.min().strftime('%Y-%m-%d')
+        data_end = df.index.max().strftime('%Y-%m-%d')
+        missing = []
+        for label, val in [('Date From', data['from_date']), ('Event Date', data['event_date']), ('Date To', data['to_date'])]:
+          if val not in df.index.strftime('%Y-%m-%d'):
+            missing.append(label + ' (' + val + ')')
+        if missing:
           logging.error(
-            'Date not found in index: %s. from_date=%s to_date=%s event_date=%s. '
-            'Index range: %s to %s (%d rows)',
-            e, data['from_date'], data['to_date'], data['event_date'],
-            df.index.min(), df.index.max(), len(df),
+            'Date not found in index: missing=%s. from_date=%s to_date=%s event_date=%s. '
+            'Data range: %s to %s (%d rows)',
+            missing, data['from_date'], data['to_date'], data['event_date'],
+            data_start, data_end, len(df),
           )
           return render_template(
             'error.html',
-            error_msg='One of your selected dates does not exist \
-            in your data set! If using anything that is not daily data (weekly, \
-            monthly etc.), you must select a date that exists in your dataset',
+            error_msg=(
+              'The following selected dates do not exist in your data: '
+              + ', '.join(missing) + '. '
+              + 'Your data source only contains data from '
+              + data_start + ' to ' + data_end + '. '
+              + 'Please go back and adjust your Date From, Event Date, and Date To '
+              + 'to fall within this range.'
+            ),
           )
+        from_d = df.index.get_loc(data['from_date'])
+        to_d = df.index.get_loc(data['to_date'])
+        event_d = df.index.get_loc(data['event_date'])
 
         pre_period = [from_d, event_d - 1]
         post_period = [event_d, to_d]
