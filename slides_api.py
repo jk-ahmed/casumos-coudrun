@@ -50,11 +50,19 @@ def create_slide(
   Returns:
     Slide ID for the new copy of the slide.
   """
+  logging.info('[SLIDES] create_slide called: session_id=%s slide_id=%s client_name=%s prepend=%s',
+               session_id, slide_id, client_name, prepend)
+
+  raw_creds = get_value_session(session['session_id'], 'credentials')
+  if raw_creds is None:
+    logging.error('[SLIDES] No credentials in Firestore for session_id=%s', session.get('session_id'))
+    return '0'
   try:
-    creds_info = json.loads(get_value_session(
-      session['session_id'], 'credentials'))
-  except ValueError as e:
-    logging.exception(e)
+    creds_info = json.loads(raw_creds)
+  except (ValueError, TypeError) as e:
+    logging.exception('[SLIDES] Failed to parse credentials: %s', e)
+    return '0'
+
   creds = Credentials.from_authorized_user_info(creds_info)
   slides_service = build('slides', 'v1', credentials=creds)
   drive_service = build('drive', 'v3', credentials=creds)
@@ -65,22 +73,30 @@ def create_slide(
       drive_service.files().copy(fileId=slide_id, body=body).execute()
     )
     slide_copy_id = drive_response.get('id')
+    logging.info('[SLIDES] Template copied successfully: slide_copy_id=%s', slide_copy_id)
   except Exception as e:
-    logging.exception(e)
+    logging.exception('[SLIDES] Failed to copy template slide_id=%s: %s', slide_id, e)
     return '0'
+
   request_data = get_value_session(session_id, 'output_data')
+  if request_data is None:
+    logging.error('[SLIDES] output_data not found in Firestore for session_id=%s', session_id)
+    return '0'
+  logging.info('[SLIDES] output_data loaded: keys=%s', list(request_data.keys()))
+
   target_event = request_data['target_event']
-  covariates = request_data['covariates']
+  covariates = request_data.get('covariates', '')
   if prepend:
     target_event = re.sub(r'^.*?_', '', target_event)
     covariates = ', '.join(
       [re.sub(r'^.*?_', '', cov) for cov in covariates.split(',')]
     )
+
   to_replace = [
     ['CLIENT_NAME', client_name],
     ['DATE', datetime.date.today().strftime('%d-%m-%Y')],
-    ['TARGET_EVENT', target_event],
-    ['COVARIATES', covariates],
+    ['TARGET_EVENT', str(target_event)],
+    ['COVARIATES', str(covariates)],
     ['PREPERIOD-START', request_data['from_date']],
     [
       'PREPERIOD-END',
@@ -91,12 +107,14 @@ def create_slide(
     ],
     ['POSTPERIOD-START', request_data['event_date']],
     ['POSTPERIOD-END', request_data['to_date']],
-    ['P_VALUE', request_data['p_value']],
-    ['INCR_ACTIONS', request_data['tot_inc']],
-    ['RELATIVE_EFFECT', request_data['rel_eff']],
-    ['SUMMARY', request_data['summary']],
-    ['REPORT', request_data['report']],
+    ['P_VALUE', str(request_data.get('p_value', ''))],
+    ['INCR_ACTIONS', str(request_data.get('tot_inc', ''))],
+    ['RELATIVE_EFFECT', str(request_data.get('rel_eff', ''))],
+    ['SUMMARY', str(request_data.get('summary', ''))],
+    ['REPORT', str(request_data.get('report', ''))],
   ]
+  logging.info('[SLIDES] Replacement pairs built: %s', [(r[0], str(r[1])[:60]) for r in to_replace])
+
   requests = []
   for label in to_replace:
     requests.append(
@@ -107,22 +125,40 @@ def create_slide(
         }
       }
     )
+
   page_id = ''
   final_element = ''
-  presentation = (
-    slides_service.presentations().get(presentationId=slide_copy_id).execute()
-  )
-  slides = presentation.get('slides')
+  try:
+    presentation = (
+      slides_service.presentations().get(presentationId=slide_copy_id).execute()
+    )
+  except Exception as e:
+    logging.exception('[SLIDES] Failed to get presentation %s: %s', slide_copy_id, e)
+    return '0'
+
+  slides = presentation.get('slides', [])
+  logging.info('[SLIDES] Presentation has %d slide(s)', len(slides))
   for slide in slides:
-    elements = slide.get('pageElements')
-    if elements:
-      for element in elements:
-        if element.get('description') == 'CHART':
-          page_id = slide['objectId']
-          final_element = element
-          break
-  image_location = f'https://storage.googleapis.com/' \
-    f'{get_secret("image_bucket")}/{request_data["image_name"]}'
+    elements = slide.get('pageElements', [])
+    for element in elements:
+      desc = element.get('description', '')
+      if desc:
+        logging.info('[SLIDES] Found element with description=%r on slide %s', desc, slide['objectId'])
+      if desc.upper() == 'CHART':
+        page_id = slide['objectId']
+        final_element = element
+        break
+    if final_element:
+      break
+
+  bucket_name = get_secret('image_bucket')
+  image_name = request_data['image_name']
+  image_location = f'https://storage.googleapis.com/{bucket_name}/{image_name}'
+  logging.info('[SLIDES] GCS bucket=%s  image_name=%s', bucket_name, image_name)
+  logging.info('[SLIDES] Image URL for Slides API: %s', image_location)
+
+  logging.info('[SLIDES] CHART element found: %s (page_id=%s)', bool(final_element), page_id)
+
   add_img = {
     'createImage': {
       'objectId': 'my_id',
@@ -140,10 +176,21 @@ def create_slide(
       'transform'
     ]
     requests.append(add_img)
+    logging.info('[SLIDES] createImage request appended')
+  else:
+    logging.warning('[SLIDES] No element with description=CHART found — chart image will NOT be inserted')
+
+  logging.info('[SLIDES] Sending batchUpdate with %d request(s)', len(requests))
   try:
-    slides_service.presentations().batchUpdate(
+    result = slides_service.presentations().batchUpdate(
       body={'requests': requests}, presentationId=slide_copy_id).execute()
-  except ValueError as e:
-    logging.exception(e)
+    replies = result.get('replies', [])
+    logging.info('[SLIDES] batchUpdate succeeded: replies=%d', len(replies))
+    for i, reply in enumerate(replies):
+      logging.info('[SLIDES] reply[%d]: %s', i, list(reply.keys()) if reply else '(empty)')
+  except Exception as e:
+    logging.exception('[SLIDES] batchUpdate failed for slide %s: %s', slide_copy_id, e)
     return 'Slides error'
+
+  logging.info('[SLIDES] create_slide complete: returning slide_copy_id=%s', slide_copy_id)
   return slide_copy_id

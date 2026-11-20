@@ -22,9 +22,10 @@ steps:
     args:
       - '-c'
       - |
-        TAG="${COMMIT_SHA:-$BUILD_ID}"
-        printf '%s' "$TAG" > /workspace/_tag
-        echo "Image tag: $TAG"
+        TAG="$COMMIT_SHA"
+        if [ -z "$$TAG" ]; then TAG="$BUILD_ID"; fi
+        printf '%s' "$$TAG" > /workspace/_tag
+        echo "Image tag: $$TAG"
 
   # Pull previous image to prime Docker's layer cache.
   # Runs in parallel with set-tag (waitFor: ['-'] = start immediately).
@@ -48,10 +49,10 @@ steps:
     args:
       - '-c'
       - |
-        TAG=$(cat /workspace/_tag)
+        TAG=$$(cat /workspace/_tag)
         docker build \
           --cache-from ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE_NAME}:latest \
-          -t ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE_NAME}:$TAG \
+          -t ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE_NAME}:$$TAG \
           -t ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE_NAME}:latest \
           .
 
@@ -63,9 +64,9 @@ steps:
     args:
       - '-c'
       - |
-        TAG=$(cat /workspace/_tag)
+        TAG=$$(cat /workspace/_tag)
         docker push \
-          ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE_NAME}:$TAG
+          ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE_NAME}:$$TAG
 
   # Push latest tag — used as --cache-from on the next build.
   - name: 'gcr.io/cloud-builders/docker'
@@ -85,9 +86,9 @@ steps:
     args:
       - '-c'
       - |
-        TAG=$(cat /workspace/_tag)
+        TAG=$$(cat /workspace/_tag)
         gcloud run deploy ${_SERVICE_NAME} \
-          --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE_NAME}:$TAG \
+          --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE_NAME}:$$TAG \
           --region=${_REGION} \
           --quiet
 
