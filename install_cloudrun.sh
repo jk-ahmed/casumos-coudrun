@@ -31,23 +31,25 @@ if [[ "$BILLING_ENABLED" = 'False' ]]; then
   exit 1
 fi
 
-echo -e "${COLOR}Enabling APIs...${NC}"
-gcloud services enable \
-  run.googleapis.com \
-  artifactregistry.googleapis.com \
-  cloudbuild.googleapis.com \
-  cloudresourcemanager.googleapis.com \
-  iamcredentials.googleapis.com \
-  googleads.googleapis.com \
-  analyticsadmin.googleapis.com \
-  analyticsdata.googleapis.com \
-  firestore.googleapis.com \
-  sheets.googleapis.com \
-  slides.googleapis.com \
-  drive.googleapis.com \
-  secretmanager.googleapis.com \
-  bigquery.googleapis.com || \
-  echo -e "${RED}Could not enable some APIs (no permission?). Continuing; ask an admin if later steps fail.${NC}"
+# APIs are NOT enabled by this script, only checked.
+echo -e "${COLOR}Checking required APIs are enabled...${NC}"
+REQUIRED_APIS="run artifactregistry cloudbuild cloudresourcemanager iamcredentials googleads analyticsadmin analyticsdata firestore sheets slides drive secretmanager bigquery"
+if ENABLED_APIS=$(gcloud services list --enabled --format="value(config.name)" 2>/dev/null) && [[ -n "$ENABLED_APIS" ]]; then
+  for API in $REQUIRED_APIS; do
+    if echo "$ENABLED_APIS" | grep -qx "$API.googleapis.com"; then
+      echo "  OK       $API.googleapis.com"
+    else
+      echo -e "  ${RED}MISSING  $API.googleapis.com${NC}"
+      MISSING_API=1
+    fi
+  done
+  if [[ -n "$MISSING_API" ]]; then
+    echo -e "${RED}Ask an admin to enable the missing APIs, then re-run.${NC}"
+    exit 1
+  fi
+else
+  echo -e "${RED}Could not list enabled APIs (no permission). Skipping the check.${NC}"
+fi
 
 echo -e "${COLOR}Verifying service account $SERVICE_ACCOUNT...${NC}"
 gcloud iam service-accounts describe $SERVICE_ACCOUNT >/dev/null || {
@@ -77,10 +79,32 @@ gcloud firestore databases create \
   --type=firestore-native 2>/dev/null || \
   echo "Firestore database causmos-db already exists."
 
+# How the container image is built (override: BUILD_MODE=sa bash install_cloudrun.sh)
+#   local - build with docker in this shell as YOUR user, push to Artifact Registry.
+#           Needs docker (Cloud Shell has it) and Artifact Registry Writer. No Cloud Build.
+#   sa    - Cloud Build runs as $SERVICE_ACCOUNT. The SA needs: read on the source
+#           bucket, Artifact Registry Writer, and Logs Writer.
+BUILD_MODE=${BUILD_MODE:-local}
+AR_REPO=cloud-run-source-deploy
+
+if [[ "$BUILD_MODE" = "local" ]]; then
+  IMAGE="$REGION-docker.pkg.dev/$PROJECT_ID/$AR_REPO/$SERVICE_NAME:$(date +%Y%m%d%H%M%S)"
+  echo -e "${COLOR}Building image locally as $USER_EMAIL: $IMAGE${NC}"
+  gcloud artifacts repositories describe $AR_REPO --location=$REGION >/dev/null 2>&1 || \
+    gcloud artifacts repositories create $AR_REPO --repository-format=docker --location=$REGION --quiet || \
+    { echo -e "${RED}Cannot find or create Artifact Registry repo $AR_REPO.${NC}"; exit 1; }
+  gcloud auth configure-docker $REGION-docker.pkg.dev --quiet
+  docker build -t "$IMAGE" . && docker push "$IMAGE" || \
+    { echo -e "${RED}Image build/push failed.${NC}"; exit 1; }
+  SOURCE_ARGS=(--image "$IMAGE")
+else
+  SOURCE_ARGS=(--source . --build-service-account "projects/$PROJECT_ID/serviceAccounts/$SERVICE_ACCOUNT")
+fi
+
 # Step 1: initial deploy to obtain the service URL
-echo -e "${COLOR}Deploying to Cloud Run (step 1/2 — initial build)...${NC}"
+echo -e "${COLOR}Deploying to Cloud Run (step 1/2, BUILD_MODE=$BUILD_MODE)...${NC}"
 gcloud run deploy $SERVICE_NAME \
-  --source . \
+  "${SOURCE_ARGS[@]}" \
   --region $REGION \
   --service-account=$SERVICE_ACCOUNT \
   --memory=4Gi \
@@ -91,7 +115,7 @@ gcloud run deploy $SERVICE_NAME \
   --allow-unauthenticated \
   --set-env-vars="GOOGLE_CLOUD_PROJECT=$PROJECT_ID,SLIDE_TEMPLATE=" \
   --set-secrets="FLASK_SECRET_KEY=flask_secret_key:latest" \
-  --quiet
+  --quiet || { echo -e "${RED}Deploy failed. Fix the error above and re-run.${NC}"; exit 1; }
 
 # Capture the URL assigned by Cloud Run
 APP_URL=$(gcloud run services describe $SERVICE_NAME \
@@ -105,7 +129,7 @@ echo -e "${COLOR}Updating APP_URL env var (step 2/2)...${NC}"
 gcloud run services update $SERVICE_NAME \
   --region=$REGION \
   --update-env-vars="APP_URL=$APP_URL" \
-  --quiet
+  --quiet || { echo -e "${RED}Could not set APP_URL.${NC}"; exit 1; }
 
 echo -e "\n${COLOR}Deployment complete!${NC}"
 echo -e "${COLOR}App URL: $APP_URL${NC}"
