@@ -96,7 +96,9 @@ def is_loopback(host) -> bool:
   return True
 
 
-if is_loopback('localhost'):
+# K_SERVICE is set by Cloud Run; 'localhost' always resolves to loopback there,
+# so is_loopback alone cannot tell local dev from a deployment.
+if is_loopback('localhost') and not os.environ.get('K_SERVICE'):
   _SERVER = 'localhost'
   _PORT = 8080
   _MAIN_URL = f'http://{_SERVER}:{_PORT}'

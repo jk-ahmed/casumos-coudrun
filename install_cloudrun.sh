@@ -16,12 +16,13 @@ COLOR='\033[0;36m' # Cyan
 RED='\033[0;31m'   # Red
 NC='\033[0m'       # No Color
 
-PROJECT_ID=$(gcloud config get-value project 2> /dev/null)
+PROJECT_ID=celestial-feat-513918-q9
+IMAGE_BUCKET=causmos-adxai-st
+gcloud config set project $PROJECT_ID --quiet
 USER_EMAIL=$(gcloud config get-value account 2> /dev/null)
-SERVICE_NAME=causmos
+SERVICE_NAME=causmos-service   # matches _SERVICE_NAME in cloudbuild.yaml
 REGION=asia-south1
-SERVICE_ACCOUNT_NAME=causmos-sa
-SERVICE_ACCOUNT=$SERVICE_ACCOUNT_NAME@$PROJECT_ID.iam.gserviceaccount.com
+SERVICE_ACCOUNT=sa-gads-ai-runner@$PROJECT_ID.iam.gserviceaccount.com   # existing SA, not created here
 
 # Check billing
 BILLING_ENABLED=$(gcloud beta billing projects describe $PROJECT_ID --format="csv(billingEnabled)" | tail -n 1)
@@ -45,23 +46,36 @@ gcloud services enable \
   slides.googleapis.com \
   drive.googleapis.com \
   secretmanager.googleapis.com \
-  bigquery.googleapis.com
+  bigquery.googleapis.com || \
+  echo -e "${RED}Could not enable some APIs (no permission?). Continuing; ask an admin if later steps fail.${NC}"
 
-echo -e "${COLOR}Creating service account...${NC}"
-gcloud iam service-accounts create $SERVICE_ACCOUNT_NAME \
-  --display-name="Causmos Cloud Run SA" 2>/dev/null || true
+echo -e "${COLOR}Verifying service account $SERVICE_ACCOUNT...${NC}"
+gcloud iam service-accounts describe $SERVICE_ACCOUNT >/dev/null || {
+  echo -e "${RED}Service account $SERVICE_ACCOUNT not found.${NC}"; exit 1; }
 
-echo -e "${COLOR}Granting IAM roles to service account...${NC}"
-for ROLE in \
-  roles/iam.serviceAccountTokenCreator \
-  roles/secretmanager.secretAccessor \
-  roles/datastore.user \
-  roles/bigquery.jobUser \
-  roles/storage.objectAdmin; do
-  gcloud projects add-iam-policy-binding $PROJECT_ID \
-    --member="serviceAccount:$SERVICE_ACCOUNT" \
-    --role=$ROLE --quiet
+# NOTE: no IAM changes are made by this script. Ask a project admin to ensure
+# $SERVICE_ACCOUNT has: secretmanager.secretAccessor, datastore.user,
+# bigquery.jobUser, iam.serviceAccountTokenCreator, and storage objectUser on
+# gs://$IMAGE_BUCKET, that the SA has iam.serviceAccountTokenCreator ON ITSELF
+# (needed to sign image URLs; bucket stays private), and that you have
+# iam.serviceAccountUser on the service account.
+gcloud storage buckets describe gs://$IMAGE_BUCKET >/dev/null 2>&1 || \
+  echo -e "${RED}Bucket gs://$IMAGE_BUCKET not found or not accessible.${NC}"
+
+# Secrets are created manually in Secret Manager; just verify they exist.
+echo -e "${COLOR}Checking secrets...${NC}"
+for S in flask_secret_key client_secret developer_token image_bucket; do
+  gcloud secrets describe "$S" >/dev/null 2>&1 || {
+    echo -e "${RED}Secret '$S' not found in $PROJECT_ID. Create it before deploying.${NC}"; exit 1; }
 done
+
+# Create named Firestore Native database used by the app (before first deploy)
+echo -e "${COLOR}Creating Firestore database causmos-db (skipped if already exists)...${NC}"
+gcloud firestore databases create \
+  --database=causmos-db \
+  --location=$REGION \
+  --type=firestore-native 2>/dev/null || \
+  echo "Firestore database causmos-db already exists."
 
 # Step 1: initial deploy to obtain the service URL
 echo -e "${COLOR}Deploying to Cloud Run (step 1/2 — initial build)...${NC}"
@@ -69,13 +83,14 @@ gcloud run deploy $SERVICE_NAME \
   --source . \
   --region $REGION \
   --service-account=$SERVICE_ACCOUNT \
-  --memory=2Gi \
+  --memory=4Gi \
   --cpu=2 \
   --min-instances=1 \
   --max-instances=10 \
   --timeout=300s \
   --allow-unauthenticated \
   --set-env-vars="GOOGLE_CLOUD_PROJECT=$PROJECT_ID,SLIDE_TEMPLATE=" \
+  --set-secrets="FLASK_SECRET_KEY=flask_secret_key:latest" \
   --quiet
 
 # Capture the URL assigned by Cloud Run
@@ -91,14 +106,6 @@ gcloud run services update $SERVICE_NAME \
   --region=$REGION \
   --update-env-vars="APP_URL=$APP_URL" \
   --quiet
-
-# Create named Firestore Native database used by the app
-echo -e "${COLOR}Creating Firestore database causmos-db (skipped if already exists)...${NC}"
-gcloud firestore databases create \
-  --database=causmos-db \
-  --location=$REGION \
-  --type=firestore-native 2>/dev/null || \
-  echo "Firestore database causmos-db already exists."
 
 echo -e "\n${COLOR}Deployment complete!${NC}"
 echo -e "${COLOR}App URL: $APP_URL${NC}"
