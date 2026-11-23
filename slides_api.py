@@ -155,7 +155,27 @@ def create_slide(
   image_name = request_data['image_name']
   image_location = f'https://storage.googleapis.com/{bucket_name}/{image_name}'
   logging.info('[SLIDES] GCS bucket=%s  image_name=%s', bucket_name, image_name)
-  logging.info('[SLIDES] Image URL for Slides API: %s', image_location)
+  # The bucket is not public (org policy), so give the Slides API a short-lived
+  # signed URL. Signing uses IAM signBlob, which needs
+  # roles/iam.serviceAccountTokenCreator for the service account on itself.
+  try:
+    import google.auth
+    from google.auth.transport.requests import Request
+    from google.cloud import storage
+    sa_creds, _ = google.auth.default(
+      scopes=['https://www.googleapis.com/auth/cloud-platform'])
+    sa_creds.refresh(Request())
+    image_location = storage.Client(credentials=sa_creds).bucket(
+      bucket_name).blob(image_name).generate_signed_url(
+        version='v4',
+        expiration=datetime.timedelta(minutes=15),
+        method='GET',
+        service_account_email=sa_creds.service_account_email,
+        access_token=sa_creds.token,
+      )
+    logging.info('[SLIDES] Using signed URL for Slides API')
+  except Exception as e:
+    logging.exception('[SLIDES] Could not sign image URL, using public URL: %s', e)
 
   logging.info('[SLIDES] CHART element found: %s (page_id=%s)', bool(final_element), page_id)
 
