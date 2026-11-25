@@ -28,6 +28,7 @@ import logging
 import numpy as np
 import pandas as pd
 import re
+from urllib.parse import urlparse
 from google_auth_oauthlib.flow import Flow
 from uuid import uuid4
 from causal import (
@@ -113,6 +114,19 @@ else:
   app.config['SESSION_COOKIE_HTTPONLY'] = True
   app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
   app.config['SESSION_COOKIE_NAME'] = '__Host-causal-impact-session'
+
+  @app.before_request
+  def redirect_to_canonical_host():
+    """Sends GET requests on any other hostname to APP_URL.
+
+    Cloud Run serves the service on several hostnames. The session cookie is
+    bound to one host, and Google redirects back to APP_URL, so a login that
+    starts on a different host loses its PKCE code_verifier ("Missing code
+    verifier"). Keeping everyone on APP_URL avoids that.
+    """
+    canonical = urlparse(_MAIN_URL).netloc
+    if request.method == 'GET' and canonical and request.host != canonical:
+      return redirect(f'{_MAIN_URL}{request.full_path.rstrip("?")}', code=302)
 
 SCOPES = [
     'https://www.googleapis.com/auth/analytics.readonly',
