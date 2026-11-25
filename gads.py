@@ -21,7 +21,9 @@ from fs_storage import get_value_session
 import logging
 from project_secrets import get_secret
 
-API_VERSION ='v22'
+# Must be an API version shipped by the pinned google-ads package
+# (google-ads 35.1.0 ships v23-v26; v22 was removed).
+API_VERSION = 'v26'
 
 def get_gads_client(mcc_id: str) -> GoogleAdsClient:
     try:
