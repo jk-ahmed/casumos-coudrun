@@ -2,7 +2,7 @@ gunicorn
 Flask
 google-analytics-data
 google-analytics-admin
-google-ads
+google-ads==35.1.0
 google-api-python-client>=2.124.0
 oauth2client
 python-dotenv
