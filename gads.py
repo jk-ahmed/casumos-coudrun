@@ -254,7 +254,15 @@ def get_gads_customer_ids(mcc_id: str):
     response = ga_service.search(customer_id=mcc_id, query=query)
   except GoogleAdsException as ge:
     logging.exception(ge)
+    details = "; ".join(
+        f"{str(e.error_code).strip()}: {e.message}" for e in ge.failure.errors
+    )
+    logging.error(
+        "[GADS] customer_client query failed for mcc_id=%s request_id=%s: %s",
+        mcc_id, ge.request_id, details)
     message = "Google Ads API error while loading customer accounts."
+    if details:
+      message += f" ({details})"
     if "CUSTOMER_NOT_ENABLED" in str(ge):
       message = "This Google Ads account is not enabled for API. Please activate it in Google Ads or select another account."
     return {"error": "CUSTOMER_NOT_ENABLED" if "CUSTOMER_NOT_ENABLED" in str(ge) else "api_error", "message": message}
